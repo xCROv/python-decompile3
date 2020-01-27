@@ -79,9 +79,11 @@ class Python37Parser(Python37BaseParser):
 
         lastc_stmt ::= forelselaststmt
         lastc_stmt ::= forelselaststmtc
-        lastc_stmt ::= ifelsestmtc
         lastc_stmt ::= iflaststmt
         lastc_stmt ::= iflaststmtc
+
+        # FIXME: Do we need these?
+        lastc_stmt ::= ifelsestmtc
         lastc_stmt ::= tryelsestmtc
 
         else_suitec ::= c_stmts
@@ -93,7 +95,11 @@ class Python37Parser(Python37BaseParser):
         """
         pass ::=
 
-        _stmts ::= stmt+
+        stmts_opt ::= stmts
+        stmts_opt ::= pass
+
+        stmts  ::= stmt+
+        _stmts ::= stmts
 
         suite_stmts ::= _stmts
         suite_stmts ::= returns
@@ -121,6 +127,15 @@ class Python37Parser(Python37BaseParser):
         stmt ::= try_except
         stmt ::= tryelsestmt
         stmt ::= tryfinallystmt
+        stmt ::= last_stmt
+
+        # last_stmt is a Python statement for which
+        # end is a "return" or raise statement and
+        # thefore may not have a COME_FROM after
+        # it. It does *not* have to be the last stmt of
+        # a list of stmts or c_stmts
+        last_stmt  ::= forelselaststmt
+        last_stmt  ::= iflaststmt
 
         stmt ::= del_stmt
         del_stmt ::= DELETE_FAST
@@ -246,9 +261,8 @@ class Python37Parser(Python37BaseParser):
 
     def p_jump(self, args):
         """
-        _jump ::= JUMP_ABSOLUTE
-        _jump ::= JUMP_FORWARD
-        _jump ::= JUMP_BACK
+        jump ::= JUMP_FORWARD
+        jump ::= JUMP_BACK
 
         # Zero or more COME_FROMs - loops can have this
         _come_froms ::= COME_FROM*
@@ -303,6 +317,16 @@ class Python37Parser(Python37BaseParser):
         assign3 ::= expr expr expr ROT_THREE ROT_TWO store store store
         """
 
+    def p_await(self, args):
+        # Python 3.5+ Await things
+        """
+        expr       ::= await_expr
+        await_expr ::= expr GET_AWAITABLE LOAD_CONST YIELD_FROM
+
+        stmt       ::= await_stmt
+        await_stmt ::= await_expr POP_TOP
+        """
+
     def p_forstmt(self, args):
         """
         get_for_iter ::= GET_ITER _come_froms FOR_ITER
@@ -318,6 +342,7 @@ class Python37Parser(Python37BaseParser):
         forelselaststmtc ::= SETUP_LOOP expr get_for_iter store
                 for_block POP_BLOCK else_suitec _come_froms
         """
+
 
     def p_import20(self, args):
         """
@@ -441,12 +466,6 @@ class Python37Parser(Python37BaseParser):
 
         subscript2 ::= expr expr DUP_TOP_TWO BINARY_SUBSCR
 
-        # FIXME: The below rule was in uncompyle6.
-        # In decompyle6 though "_ifstmts_jump" is part of an "ifstmt"
-        # where as the below rule is appropriate for an "ifelsesmt"
-        # Investigate and reconcile
-        # _ifstmts_jump ::= c_stmts_opt JUMP_FORWARD _come_froms
-
         kv3       ::= expr expr STORE_MAP
         """
         return
@@ -456,9 +475,6 @@ class Python37Parser(Python37BaseParser):
         # Python 3.3+ adds yield from.
         expr          ::= yield_from
         yield_from    ::= expr GET_YIELD_FROM_ITER LOAD_CONST YIELD_FROM
-
-        # We do the grammar hackery below for semantics
-        # actions that want c_stmts_opt at index 1
 
         # Python 3.5+ has jump optimization to remove the redundant
         # jump_excepts. But in 3.3 we need them added
@@ -488,7 +504,7 @@ class Python37Parser(Python37BaseParser):
 
         # Python 3.4+ optimizes the trailing two JUMPS away
 
-        _ifstmts_jump ::= c_stmts_opt JUMP_ABSOLUTE JUMP_FORWARD _come_froms
+        _ifstmts_jump ::= stmts_opt JUMP_FORWARD JUMP_FORWARD _come_froms
         """
 
     def p_35on(self, args):
@@ -505,48 +521,39 @@ class Python37Parser(Python37BaseParser):
         # after the jump
         c_stmts ::= lastc_stmt come_froms c_stmts
 
-        # Python 3.5+ Await statement
-        expr       ::= await_expr
-        await_expr ::= expr GET_AWAITABLE LOAD_CONST YIELD_FROM
-
-        stmt       ::= await_stmt
-        await_stmt ::= await_expr POP_TOP
-
         # Python 3.5+ async additions
 
         inplace_op ::= INPLACE_MATRIX_MULTIPLY
         binary_operator  ::= BINARY_MATRIX_MULTIPLY
 
         # Python 3.5+ does jump optimization
-        # In <.3.5 the below is a JUMP_FORWARD to a JUMP_ABSOLUTE.
+        # In <.3.5 the below is a "JUMP_FORWARD" to a "jump".
 
         return_if_stmt ::= ret_expr RETURN_END_IF POP_BLOCK
         return_if_lambda   ::= RETURN_END_IF_LAMBDA COME_FROM
 
-        jb_else     ::= JUMP_BACK ELSE
-        jb_else     ::= JUMP_BACK COME_FROM
+        jb_elsec     ::= JUMP_BACK ELSE
+        jb_elsec     ::= JUMP_BACK COME_FROM
         ifelsestmtc ::= testexpr c_stmts_opt JUMP_FORWARD else_suitec
-        ifelsestmtc ::= testexpr c_stmts_opt jb_else else_suitec
+        ifelsestmtc ::= testexpr c_stmts_opt jb_elsec else_suitec
 
         # We want to keep the positions of the "then" and
         # "else" statements in "ifelstmtl" similar to others of this ilk.
         testexpr_cf ::= testexpr come_froms
-        ifelsestmtc ::= testexpr_cf c_stmts_opt jb_else else_suitec
+
+        ifelsestmtc ::= testexpr_cf c_stmts_opt jb_elsec else_suitec
 
         # 3.5 Has jump optimization which can route the end of an
         # "if/then" back to to a loop just before an else.
-        jump_absolute_else ::= jb_else
-        jump_absolute_else ::= CONTINUE ELSE
+        jb_elsec ::= CONTINUE ELSE
 
         # Our hacky "ELSE" determination doesn't do a good job and really
         # determine the start of an "else". It could also be the end of an
         # "if-then" which ends in a "continue". Perhaps with real control-flow
         # analysis we'll sort this out. Or call "ELSE" something more appropriate.
-        _ifstmts_jump ::= c_stmts_opt ELSE
+        _ifstmts_jump ::= stmts_opt ELSE
 
-        # ifstmt ::= testexpr c_stmts_opt
-
-        iflaststmt ::= testexpr c_stmts_opt JUMP_FORWARD
+        iflaststmt ::= testexpr stmts_opt JUMP_FORWARD
         """
 
     def p_37async(self, args):
@@ -614,7 +621,7 @@ class Python37Parser(Python37BaseParser):
         compare_chained1a_37      ::= expr DUP_TOP ROT_THREE COMPARE_OP POP_JUMP_IF_FALSE
                                       compare_chained2a_37 COME_FROM POP_TOP COME_FROM
         compare_chained1b_false_37 ::= expr DUP_TOP ROT_THREE COMPARE_OP POP_JUMP_IF_FALSE
-                                      compare_chained2b_false_37 POP_TOP _jump COME_FROM
+                                      compare_chained2b_false_37 POP_TOP jump COME_FROM
 
         compare_chained1c_37      ::= expr DUP_TOP ROT_THREE COMPARE_OP POP_JUMP_IF_FALSE
                                       compare_chained2a_37 POP_TOP
@@ -622,7 +629,7 @@ class Python37Parser(Python37BaseParser):
         compare_chained1_false_37 ::= expr DUP_TOP ROT_THREE COMPARE_OP POP_JUMP_IF_FALSE
                                       compare_chained2c_37 POP_TOP JUMP_FORWARD COME_FROM
         compare_chained1_false_37 ::= expr DUP_TOP ROT_THREE COMPARE_OP POP_JUMP_IF_FALSE
-                                      compare_chained2b_false_37 POP_TOP _jump COME_FROM
+                                      compare_chained2b_false_37 POP_TOP jump COME_FROM
 
         compare_chained2_false_37 ::= expr DUP_TOP ROT_THREE COMPARE_OP POP_JUMP_IF_FALSE
                                       compare_chained2a_false_37 POP_TOP JUMP_BACK COME_FROM
@@ -654,8 +661,10 @@ class Python37Parser(Python37BaseParser):
         list_if37                  ::= compare_chained37_false list_iter
         list_if37_not              ::= compare_chained37 list_iter
 
-        _ifstmts_jump              ::= c_stmts_opt come_froms
-        _ifstmts_jump              ::= COME_FROM c_stmts come_froms
+        _ifstmts_jumpc             ::= c_stmts_opt come_froms
+        _ifstmts_jumpc             ::= COME_FROM c_stmts come_froms
+        _ifstmts_jump              ::= stmts come_froms
+        _ifstmts_jump              ::= COME_FROM stmts come_froms
 
         and_not                    ::= expr jmp_false expr POP_JUMP_IF_TRUE
         testfalse                  ::= and_not
@@ -729,7 +738,7 @@ class Python37Parser(Python37BaseParser):
 
         # a JUMP_FORWARD to another JUMP_FORWARD can get turned into
         # a JUMP_ABSOLUTE with no COME_FROM
-        conditional    ::= expr jmp_false expr jump_absolute_else expr
+        conditional    ::= expr jmp_false expr jump_forward_else expr
 
         # if_expr_true are for conditions which always evaluate true
         # There is dead or non-optional remnants of the condition code though,
@@ -795,7 +804,7 @@ class Python37Parser(Python37BaseParser):
         # FIXME: add this:
         # expr    ::= assert_expr_or
 
-        ifstmt ::= testexpr _ifstmts_jump
+        ifstmt     ::= testexpr _ifstmts_jump
 
         testexpr ::= testfalse
         testexpr ::= testtrue
@@ -803,30 +812,29 @@ class Python37Parser(Python37BaseParser):
         testtrue ::= expr jmp_true
 
         _ifstmts_jump ::= return_if_stmts
-        _ifstmts_jump ::= c_stmts_opt COME_FROM
+        _ifstmts_jump ::= stmts_opt come_froms
 
-        iflaststmt  ::= testexpr c_stmts
-        iflaststmt  ::= testexpr c_stmts JUMP_ABSOLUTE
+        iflaststmt  ::= testexpr stmts
+        iflaststmt  ::= testexpr stmts JUMP_FORWARD
 
+        iflaststmtc ::= testexpr c_stmts
         iflaststmtc ::= testexpr c_stmts JUMP_BACK
         iflaststmtc ::= testexpr c_stmts JUMP_BACK COME_FROM_LOOP
         iflaststmtc ::= testexpr c_stmts JUMP_BACK POP_BLOCK
 
         # These are used to keep parse tree indices the same
-        jump_forward_else  ::= JUMP_FORWARD
-        jump_forward_else  ::= JUMP_FORWARD ELSE
-        jump_forward_else  ::= JUMP_FORWARD COME_FROM
-        jump_absolute_else ::= JUMP_ABSOLUTE ELSE
-        jump_absolute_else ::= JUMP_ABSOLUTE _come_froms
-        jump_absolute_else ::= come_froms _jump COME_FROM
+        # in "if"/"else" like rules.
+        jump_forward_else ::= JUMP_FORWARD ELSE
+        jump_forward_else ::= JUMP_FORWARD _come_froms
+        jump_forward_else ::= come_froms jump COME_FROM
 
         # Note: in if/else kinds of statements, we err on the side
         # of missing "else" clauses. Therefore we include grammar
         # rules with and without ELSE.
 
-        ifelsestmt ::= testexpr c_stmts_opt JUMP_FORWARD
+        ifelsestmt ::= testexpr stmts_opt JUMP_FORWARD
                        else_suite opt_come_from_except
-        ifelsestmt ::= testexpr c_stmts_opt jump_forward_else
+        ifelsestmt ::= testexpr stmts_opt jump_forward_else
                        else_suite _come_froms
 
         # This handles the case where a "JUMP_ABSOLUTE" is part
@@ -837,8 +845,8 @@ class Python37Parser(Python37BaseParser):
         # ifelsestmt ::= testexpr c_stmts_opt jump_forward_else
         #                pass  _come_froms
 
-        ifelsestmtc ::= testexpr c_stmts_opt JUMP_ABSOLUTE else_suitec
-        ifelsestmtc ::= testexpr c_stmts_opt jump_absolute_else else_suitec
+        ifelsestmtc ::= testexpr c_stmts_opt JUMP_FORWARD else_suitec
+        ifelsestmtc ::= testexpr c_stmts_opt jump_forward_else else_suitec
         ifelsestmtc ::= testexpr c_stmts_opt cf_jump_back else_suitec
 
         ifelsestmtr ::= testexpr return_if_stmts returns
@@ -885,7 +893,7 @@ class Python37Parser(Python37BaseParser):
         # This is used in Python 3 in
         # "except ... as e" to remove 'e' after the c_stmts_opt finishes
         except_suite_finalize ::= SETUP_FINALLY c_stmts_opt except_var_finalize
-                                  END_FINALLY _jump
+                                  END_FINALLY jump
 
         except_var_finalize ::= POP_BLOCK POP_EXCEPT LOAD_CONST COME_FROM_FINALLY
                                 LOAD_CONST store del_stmt
@@ -898,7 +906,7 @@ class Python37Parser(Python37BaseParser):
         except_cond2 ::= DUP_TOP expr COMPARE_OP
                          jmp_false POP_TOP store POP_TOP come_from_opt
 
-        except  ::=  POP_TOP POP_TOP POP_TOP c_stmts_opt POP_EXCEPT _jump
+        except  ::=  POP_TOP POP_TOP POP_TOP c_stmts_opt POP_EXCEPT jump
         except  ::=  POP_TOP POP_TOP POP_TOP returns
 
         jmp_abs ::= JUMP_ABSOLUTE
@@ -982,7 +990,7 @@ class Python37Parser(Python37BaseParser):
         stmt               ::= conditional_not_lambda
 
         # If statement inside a loop:
-        stmt               ::= ifstmtc
+        cstmt              ::= ifstmtc
 
         if_expr_lambda     ::= expr jmp_false expr return_if_lambda
                                return_stmt_lambda LAMBDA_MARKER
@@ -997,11 +1005,13 @@ class Python37Parser(Python37BaseParser):
         return_closure ::= LOAD_CLOSURE RETURN_VALUE RETURN_LAST
 
         stmt ::= whileTruestmt
-        ifelsestmt ::= testexpr c_stmts_opt JUMP_FORWARD else_suite _come_froms
+        ifelsestmt  ::= testexpr stmts_opt JUMP_FORWARD else_suite _come_froms
+        ifelsestmtc ::= testexpr c_stmts_opt JUMP_FORWARD else_suite _come_froms
 
         ifstmtc            ::= testexpr _ifstmts_jumpc
 
         _ifstmts_jumpc     ::= c_stmts JUMP_BACK
+        _ifstmts_jump      ::= stmts JUMP_BACK
         _ifstmts_jumpc     ::= _ifstmts_jump
 
         # The following can happen when the jump offset is large and
@@ -1150,7 +1160,7 @@ class Python37Parser(Python37BaseParser):
         tryfinally36     ::= SETUP_FINALLY returns
                              COME_FROM_FINALLY suite_stmts_opt END_FINALLY
         except_suite_finalize ::= SETUP_FINALLY returns
-                                  COME_FROM_FINALLY suite_stmts_opt END_FINALLY _jump
+                                  COME_FROM_FINALLY suite_stmts_opt END_FINALLY jump
 
         stmt ::= tryfinally_return_stmt
         tryfinally_return_stmt ::= SETUP_FINALLY suite_stmts_opt POP_BLOCK LOAD_CONST

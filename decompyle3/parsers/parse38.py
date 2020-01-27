@@ -141,7 +141,7 @@ class Python38Parser(Python37Parser):
                                expr ROT_FOUR
                                POP_EXCEPT RETURN_VALUE END_FINALLY
 
-        except_handler38   ::= _jump COME_FROM_FINALLY
+        except_handler38   ::= jump COME_FROM_FINALLY
                                except_stmts END_FINALLY opt_come_from_except
         except_handler38a  ::= COME_FROM_FINALLY POP_TOP POP_TOP POP_TOP
                                POP_EXCEPT POP_TOP stmts END_FINALLY

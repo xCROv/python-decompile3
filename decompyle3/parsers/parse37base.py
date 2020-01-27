@@ -998,7 +998,7 @@ class Python37BaseParser(PythonParser):
             "ifstmt": ifstmt,
             "or": or_check,
             "testtrue": testtrue,
-            "testfalsel": testtrue,
+            "testfalsec": testtrue,
             "while1elsestmt": while1elsestmt,
             "while1stmt": while1stmt,
             "try_elsestmtc38": tryelsestmtc3,
@@ -1017,10 +1017,11 @@ class Python37BaseParser(PythonParser):
         self.check_reduce["iflaststmt"] = "AST"
         self.check_reduce["iflaststmtc"] = "AST"
         self.check_reduce["ifstmt"] = "AST"
+        self.check_reduce["ifstmtc"] = "AST"
         self.check_reduce["import_from37"] = "AST"
         self.check_reduce["or"] = "AST"
         self.check_reduce["testtrue"] = "tokens"
-        self.check_reduce["testfalsel"] = "tokens"
+        self.check_reduce["testfalsec"] = "tokens"
         return
 
     def custom_classfunc_rule(self, opname, token, customize, next_token):
